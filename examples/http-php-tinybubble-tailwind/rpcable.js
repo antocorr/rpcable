@@ -1,0 +1,505 @@
+const REQUEST_PATH = '--request';
+const RESPONSE_PATH = '--response';
+const SUPPORTED_TRANSPORTS = new Set(['socketio', 'websocket', 'http', 'collector']);
+const RECEIVER_LOG_DEFAULTS = Object.freeze({
+    notFound: 'error',
+    permission: 'error',
+    forbidden: 'error',
+});
+const RECEIVER_LOG_MODES = new Set([false, 'console.log', 'console.error', 'error']);
+
+class RpcAbleBase {
+    target = null;
+    #extensionKeywords = new Set();
+
+    extend(methodAndProps) {
+        if (!methodAndProps || typeof methodAndProps !== 'object') return;
+        for (const key of Object.keys(methodAndProps)) {
+            assignPath(this.target, key, methodAndProps[key]);
+        }
+    }
+
+    extendOnce(keyword, methodAndProps) {
+        if (this.#extensionKeywords.has(keyword)) return;
+        this.#extensionKeywords.add(keyword);
+        this.extend(methodAndProps);
+    }
+}
+
+function assignPath(target, key, value) {
+    if (!target || typeof target !== 'object') return;
+    if (!key.includes('.')) {
+        target[key] = value;
+        return;
+    }
+
+    const parts = key.split('.');
+    let current = target;
+    for (let i = 0; i < parts.length - 1; i++) {
+        const part = parts[i];
+        if (!current[part] || typeof current[part] !== 'object') {
+            current[part] = {};
+        }
+        current = current[part];
+    }
+    current[parts[parts.length - 1]] = value;
+}
+
+function parseMaybeJson(payload) {
+    if (typeof payload !== 'string') return payload;
+    try {
+        return JSON.parse(payload);
+    } catch {
+        return null;
+    }
+}
+
+function normalizePayload(payload) {
+    if (payload == null) return null;
+
+    if (typeof Buffer !== 'undefined' && Buffer.isBuffer(payload)) {
+        return parseMaybeJson(payload.toString('utf8'));
+    }
+
+    if (payload instanceof Uint8Array) {
+        return parseMaybeJson(new TextDecoder().decode(payload));
+    }
+
+    return parseMaybeJson(payload);
+}
+
+function serializeError(error) {
+    if (error instanceof Error) {
+        return { name: error.name, message: error.message };
+    }
+    return { name: 'Error', message: String(error) };
+}
+
+function inferTransport(options) {
+    if (options.transport) return String(options.transport).toLowerCase();
+    if (options.endpoint) return 'http';
+    if (options.socket && typeof options.socket.emit === 'function') return 'socketio';
+    if (options.socket && typeof options.socket.send === 'function') return 'websocket';
+    return 'collector';
+}
+
+export function encodeRpcMessage(event, batch) {
+    return JSON.stringify({ _rpcable: 1, event, batch });
+}
+
+export function decodeRpcMessage(payload, expectedEvent = null) {
+    const parsed = normalizePayload(payload);
+
+    if (Array.isArray(parsed)) return parsed;
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!Array.isArray(parsed.batch)) return null;
+    if (expectedEvent && parsed.event !== expectedEvent) return null;
+
+    return parsed.batch;
+}
+
+export class RpcAble extends RpcAbleBase {
+    _batch = null;
+    _pendingRequests = new Map();
+    _collectorQueue = [];
+    _httpFetch = null;
+
+    constructor(options = {}) {
+        super();
+
+        if (!options || typeof options !== 'object') {
+            throw new Error('[RpcAble] options object is required');
+        }
+
+        this.transport = inferTransport(options);
+        if (!SUPPORTED_TRANSPORTS.has(this.transport)) {
+            throw new Error(`[RpcAble] unsupported transport "${this.transport}"`);
+        }
+
+        this.socket = options.socket || null;
+        this.endpoint = options.endpoint || null;
+        this.channel = options.channel || '';
+        this.requestTimeoutMs = options.requestTimeoutMs ?? 8000;
+        this.fetchImpl = options.fetchImpl || globalThis.fetch;
+        this.httpHeaders = options.headers || { 'Content-Type': 'application/json' };
+        this.target = options.target || this;
+
+        if (this.transport === 'http' && typeof this.fetchImpl !== 'function') {
+            throw new Error('[RpcAble] fetch is required for http transport');
+        }
+        if (this.transport === 'http' && !this.endpoint) {
+            throw new Error('[RpcAble] endpoint is required for http transport');
+        }
+        if ((this.transport === 'socketio' || this.transport === 'websocket') && !this.socket) {
+            throw new Error(`[RpcAble] socket is required for ${this.transport} transport`);
+        }
+
+        if ((this.transport === 'socketio' || this.transport === 'websocket') && typeof this.target[RESPONSE_PATH] !== 'function') {
+            this.target[RESPONSE_PATH] = (payload) => this._handleResponse(payload);
+        }
+
+        if (this.transport === 'http') {
+            this._httpFetch = this.fetchImpl.bind(globalThis);
+            this._httpPushReceiver = new RpcAbleReceiver({ target: this.target });
+        }
+
+        return new Proxy(this.target, {
+            get: (target, prop) => {
+                if (typeof prop === 'symbol') return Reflect.get(target, prop);
+                if (prop in this) {
+                    const val = this[prop];
+                    return typeof val === 'function' ? val.bind(this) : val;
+                }
+                if (prop in target) return target[prop];
+                return this._createMethodProxy([prop]);
+            },
+        });
+    }
+
+    destroy() {
+        const error = new Error('[RpcAble] client destroyed');
+        for (const [, pending] of this._pendingRequests) {
+            clearTimeout(pending.timer);
+            pending.reject(error);
+        }
+        this._pendingRequests.clear();
+        this._batch = null;
+        this._collectorQueue = [];
+    }
+
+    flush() {
+        if (this.transport !== 'collector') return [];
+        const out = this._collectorQueue;
+        this._collectorQueue = [];
+        return out;
+    }
+
+    _createMethodProxy(path) {
+        return new Proxy(() => {}, {
+            get: (_, prop) => this._createMethodProxy(path.concat(prop)),
+            apply: (_, __, args) => this._enqueue(path, args),
+        });
+    }
+
+    _enqueue(path, args) {
+        if (!this._batch) {
+            this._batch = [];
+            queueMicrotask(() => this._flush());
+        }
+
+        const entry = {
+            path,
+            args,
+            requestPayload: null,
+            requestPromise: null,
+            sent: false,
+            resultPromise: null,
+            resolve: null,
+            reject: null,
+        };
+
+        if (this.transport === 'http') {
+            entry.resultPromise = new Promise((resolve, reject) => {
+                entry.resolve = resolve;
+                entry.reject = reject;
+            });
+        }
+
+        this._batch.push(entry);
+
+        if (this.transport === 'http') {
+            const requestFactory = () => entry.resultPromise;
+            return {
+                request: requestFactory,
+                expects: requestFactory,
+                then: (...thenArgs) => entry.resultPromise.then(...thenArgs),
+                catch: (...catchArgs) => entry.resultPromise.catch(...catchArgs),
+                finally: (...finallyArgs) => entry.resultPromise.finally(...finallyArgs),
+            };
+        }
+
+        const requestFactory = (opts = {}) => this._request(entry, opts);
+        const fireAndForgetError = () => {
+            throw new Error(
+                '[RpcAble] This transport is fire-and-forget — remove the await, ' +
+                'or use .request() / .expects() to get a response back from the server.'
+            );
+        };
+
+        return {
+            request: requestFactory,
+            expects: requestFactory,
+            then: fireAndForgetError,
+            catch: fireAndForgetError,
+            finally: fireAndForgetError,
+        };
+    }
+
+    _request(entry, opts) {
+        if (this.transport === 'collector') {
+            return Promise.reject(new Error('[RpcAble] collector transport does not support request()'));
+        }
+        return this._markAsRequest(entry, opts);
+    }
+
+    _markAsRequest(entry, opts) {
+        if (entry.requestPromise) return entry.requestPromise;
+
+        if (entry.sent) {
+            return Promise.reject(new Error('[RpcAble] request() must be called in the same tick'));
+        }
+
+        const id = crypto.randomUUID();
+        const timeoutMs = Number(opts?.timeoutMs ?? this.requestTimeoutMs);
+
+        entry.requestPayload = { id, path: entry.path, args: entry.args };
+        entry.path = [REQUEST_PATH];
+        entry.args = [entry.requestPayload];
+
+        entry.requestPromise = new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this._pendingRequests.delete(id);
+                reject(new Error(`[RpcAble] request timeout (${timeoutMs}ms)`));
+            }, timeoutMs);
+
+            this._pendingRequests.set(id, { resolve, reject, timer });
+        });
+
+        return entry.requestPromise;
+    }
+
+    _handleResponse(payload) {
+        const id = payload?.id;
+        if (!id) return;
+
+        const pending = this._pendingRequests.get(id);
+        if (!pending) return;
+
+        clearTimeout(pending.timer);
+        this._pendingRequests.delete(id);
+
+        if (payload?.ok) {
+            pending.resolve(payload.result);
+            return;
+        }
+
+        const errorInfo = payload?.error;
+        const message = typeof errorInfo === 'string'
+            ? errorInfo
+            : (errorInfo?.message || '[RpcAble] request failed');
+        const err = new Error(message);
+        if (errorInfo?.name) err.name = errorInfo.name;
+        pending.reject(err);
+    }
+
+    async _flush() {
+        const batch = this._batch;
+        this._batch = null;
+        if (!batch?.length) return;
+
+        batch.forEach(entry => { entry.sent = true; });
+
+        const payload = batch.map(entry => ({ path: entry.path, args: entry.args }));
+
+        if (this.transport === 'collector') {
+            this._collectorQueue = this._collectorQueue.concat(payload);
+            return;
+        }
+
+        if (this.transport === 'socketio') {
+            this.socket.emit(this.channel, payload);
+            return;
+        }
+
+        if (this.transport === 'websocket') {
+            const openState = this.socket.OPEN ?? 1;
+            if (typeof this.socket.readyState === 'number' && this.socket.readyState !== openState) {
+                const error = new Error('[RpcAble] WebSocket is not open');
+                for (const entry of batch) {
+                    const id = entry.requestPayload?.id;
+                    if (!id) continue;
+                    const pending = this._pendingRequests.get(id);
+                    if (!pending) continue;
+                    clearTimeout(pending.timer);
+                    this._pendingRequests.delete(id);
+                    pending.reject(error);
+                }
+                return;
+            }
+            this.socket.send(encodeRpcMessage(this.channel, payload));
+            return;
+        }
+
+        // http
+        try {
+            const res = await this._httpFetch(this.endpoint, {
+                method: 'POST',
+                headers: this.httpHeaders,
+                body: JSON.stringify(payload),
+            });
+
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+            const responseJson = await res.json();
+            const results = Array.isArray(responseJson?.results) ? responseJson.results : [];
+            const push = Array.isArray(responseJson?.push) ? responseJson.push : [];
+
+            if (push.length) {
+                this._httpPushReceiver.dispatch(push).catch((e) => {
+                    console.error('[RpcAble] push handler error:', e?.message ?? e);
+                });
+            }
+
+            batch.forEach((entry, index) => {
+                entry.resolve(results[index]);
+            });
+        } catch (error) {
+            batch.forEach(entry => entry.reject(error));
+        }
+    }
+}
+
+export class RpcAbleReceiver extends RpcAbleBase {
+    _receiverLog = { ...RECEIVER_LOG_DEFAULTS };
+
+    constructor(options = {}) {
+        super();
+        if (options.target) this.target = options.target;
+        this.setSettings(options);
+    }
+
+    setSettings(settings = null) {
+        this._receiverLog = {
+            notFound: this._normalizeReceiverLogMode(settings?.notFound, RECEIVER_LOG_DEFAULTS.notFound),
+            permission: this._normalizeReceiverLogMode(settings?.permission, RECEIVER_LOG_DEFAULTS.permission),
+            forbidden: this._normalizeReceiverLogMode(settings?.forbidden, RECEIVER_LOG_DEFAULTS.forbidden),
+        };
+    }
+
+    _normalizeReceiverLogMode(value, fallback) {
+        if (typeof value === 'undefined') return fallback;
+        if (RECEIVER_LOG_MODES.has(value)) return value;
+        return fallback;
+    }
+
+    _emitReceiverLog(kind, message) {
+        const mode = this._receiverLog?.[kind];
+        if (mode === false) return;
+        if (mode === 'console.log') {
+            console.log(message);
+            return;
+        }
+        if (mode === 'console.error' || mode === 'error' || typeof mode === 'undefined') {
+            console.error(message);
+        }
+    }
+
+    async dispatch(batch, options = null) {
+        if (!Array.isArray(batch)) return [];
+        const role = options?.role ?? null;
+        const results = [];
+        for (const entry of batch) {
+            results.push(await this._invokeMethod(role, entry.path, entry.args || []));
+        }
+        return results;
+    }
+
+    async _invokeMethod(role, path, args) {
+        if (!Array.isArray(path) || !path.length) {
+            return undefined;
+        }
+
+        if (path.length === 1 && path[0] === REQUEST_PATH) {
+            return await this._handleRequest(role, args[0]);
+        }
+
+        let current = this.target;
+        let permissions = null;
+        let parent = null;
+        let propName = null;
+        const className = current?.constructor?.name || 'Object';
+
+        for (let i = 0; i < path.length; i++) {
+            const key = path[i];
+
+            if (current && typeof current[key] !== 'undefined') {
+                if (current.permissions && Object.prototype.hasOwnProperty.call(current.permissions, key)) {
+                    permissions = current.permissions;
+                }
+                parent = current;
+                propName = key;
+                current = current[key];
+            } else {
+                if (key === 'set' && i === path.length - 1 && parent && propName) {
+                    parent[propName] = args[0];
+                    return args[0];
+                }
+                this._emitReceiverLog('notFound', `[RpcAble] ${path.join('.')} not found in ${className}`);
+                return undefined;
+            }
+        }
+
+        // Method is listed in permissions — treat value as allowed-roles whitelist.
+        // Any falsy or non-array value (undefined, false, null, []) means nobody passes.
+        // role === null bypasses all permission checks (internal/unauthenticated calls).
+        if (role !== null && permissions) {
+            const allowedRoles = permissions[propName];
+            const allowed = Array.isArray(allowedRoles) ? allowedRoles : [];
+            if (!allowed.includes(role)) {
+                this._emitReceiverLog('forbidden', `[RpcAble] access denied: ${path.join('.')} for role "${role}"`);
+                return undefined;
+            }
+        }
+
+        // Permissions object exists but method is not listed — deny (whitelist mode).
+        const scopedPermissions = parent?.permissions;
+        if (
+            role !== null &&
+            scopedPermissions &&
+            typeof scopedPermissions === 'object' &&
+            !Object.prototype.hasOwnProperty.call(scopedPermissions, propName)
+        ) {
+            this._emitReceiverLog('permission', `[RpcAble] access denied: ${path.join('.')} not listed in permissions`);
+            return undefined;
+        }
+
+        if (typeof current === 'function') {
+            if (role !== null) args.push(role);
+            return await current.apply(this.target, args);
+        }
+        return current;
+    }
+
+    async _handleRequest(role, requestPayload) {
+        const id = requestPayload?.id;
+        const path = requestPayload?.path;
+        const args = requestPayload?.args || [];
+
+        if (!id || !Array.isArray(path)) {
+            return undefined;
+        }
+
+        try {
+            const result = await this._invokeMethod(role, path, args);
+            this._sendResponse({ id, ok: true, result });
+            return result;
+        } catch (error) {
+            this._sendResponse({ id, ok: false, error: serializeError(error) });
+            return undefined;
+        }
+    }
+
+    _sendResponse(payload) {
+        const client = this.target?.client;
+        if (!client) return;
+        try {
+            if (typeof client._enqueue === 'function') {
+                client._enqueue([RESPONSE_PATH], [payload]);
+                return;
+            }
+            client[RESPONSE_PATH](payload);
+        } catch {
+            // ignore missing response channel
+        }
+    }
+}

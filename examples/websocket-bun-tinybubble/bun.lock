@@ -1,0 +1,15 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "rpcable-example-websocket-bun-tinybubble",
+      "dependencies": {
+        "tinybubble": "^1.0.1",
+      },
+    },
+  },
+  "packages": {
+    "tinybubble": ["tinybubble@1.0.1", "", {}, "sha512-cD6Izw063l+2W2zM9eQrdYd5B7JAh863xqFz5GfJ9mEzDAag0G1/RBmWBePskyO4U3KW/ZwpUt9M56jDQruFUw=="],
+  }
+}
