@@ -1,0 +1,23 @@
+{
+  "skill_name": "rpcable-expert",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "My project has both UserSession.ts and UserSessionHttp.ts with duplicated logic. I want a single transport-transparent UserSession class with socket.io and HTTP support (Bun or Express), plus HTTP push via collector/pending queue. Refactor it without breaking internal APIs.",
+      "expected_output": "Introduces a single UserSession with WS/HTTP adapters, uses RpcAble + RpcAbleReceiver correctly, and preserves HTTP push/results parity.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "I have permission bugs: some admin calls still go through with role=user. Check the receiver wiring and align receive/receiveAsync role handling in the right place, with updated tests.",
+      "expected_output": "Fixes role propagation in the adapter/receiver flow, updates permission tests, and keeps behavior consistent across transports.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "On the HTTP client I receive {results, push} but the push entries do not trigger local methods. I want RpcAble transport=http to process push automatically like WebSocket, with dedicated tests.",
+      "expected_output": "Implements automatic routing of HTTP push entries to the local target through a receiver and adds regression tests.",
+      "files": []
+    }
+  ]
+}
