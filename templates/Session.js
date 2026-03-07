@@ -34,4 +34,8 @@ userSession.extend({
 });
 
 const receiver = new RpcAbleReceiver({ target: session });
-socket.on(CHANNEL, (batch) => receiver.receive(batch));
+socket.on(CHANNEL, (batch) => {
+    receiver.dispatch(batch).catch((error) => {
+        console.error('[RpcAble] receiver dispatch failed:', error);
+    });
+});

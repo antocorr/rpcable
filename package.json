@@ -17,6 +17,8 @@
     ],
     "scripts": {
         "test": "bun test",
+        "pack:check": "npm pack --dry-run --json",
+        "prepublishOnly": "bun test",
         "example:socketio-node": "npm --prefix examples/socketio-node-tinybubble-tailwind run dev",
         "example:http-bun": "cd examples/http-bun-tinybubble && bun run dev",
         "example:websocket-bun": "cd examples/websocket-bun-tinybubble && bun run dev",
