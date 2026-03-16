@@ -20,33 +20,44 @@ afterEach(() => {
 });
 
 describe('RpcAble http transport', () => {
-    test('a single call resolves with the server return value', async () => {
+    test('a single request() call resolves with the server return value', async () => {
         const client = new RpcAble({ transport: 'http', endpoint: '/rpc' });
-        expect(await client.getGames()).toBe('getGames');
+        expect(await client.getGames().request()).toBe('getGames');
     });
 
-    test('concurrent calls are batched into one fetch', async () => {
+    test('awaiting a fire-and-forget call throws a helpful error', () => {
         const client = new RpcAble({ transport: 'http', endpoint: '/rpc' });
-        const [a, b] = await Promise.all([client.foo(), client.bar()]);
+        const ticket = client.getGames();
+
+        expect(() => ticket.then()).toThrow('fire-and-forget');
+        expect(() => ticket.catch()).toThrow('fire-and-forget');
+        expect(() => ticket.finally()).toThrow('fire-and-forget');
+    });
+
+    test('concurrent request() calls are batched into one fetch', async () => {
+        const client = new RpcAble({ transport: 'http', endpoint: '/rpc' });
+        const [a, b] = await Promise.all([client.foo().request(), client.bar().request()]);
         expect(mockFetch.mock.calls).toHaveLength(1);
         expect(a).toBe('foo');
         expect(b).toBe('bar');
     });
 
-    test('supports namespace path', async () => {
+    test('supports namespace path via request()', async () => {
         const client = new RpcAble({ transport: 'http', endpoint: '/rpc' });
-        expect(await client.scenes.getAll()).toBe('scenes.getAll');
+        expect(await client.scenes.getAll().request()).toBe('scenes.getAll');
     });
 
-    test('posts to the correct endpoint', async () => {
+    test('fire-and-forget calls still post to the correct endpoint', async () => {
         const client = new RpcAble({ transport: 'http', endpoint: '/my/endpoint' });
-        await client.ping();
+        client.ping();
+        await Promise.resolve();
         expect(mockFetch.mock.calls[0][0]).toBe('/my/endpoint');
     });
 
-    test('sends args in the request body', async () => {
+    test('fire-and-forget calls still send args in the request body', async () => {
         const client = new RpcAble({ transport: 'http', endpoint: '/rpc' });
-        await client.deleteUser({ userId: '7' });
+        client.deleteUser({ userId: '7' });
+        await Promise.resolve();
         const body = JSON.parse(mockFetch.mock.calls[0][1].body);
         expect(body[0].args).toEqual([{ userId: '7' }]);
     });
@@ -54,13 +65,23 @@ describe('RpcAble http transport', () => {
     test('rejects all pending calls on fetch error', async () => {
         globalThis.fetch = mock(async () => ({ ok: false, status: 500 }));
         const client = new RpcAble({ transport: 'http', endpoint: '/rpc' });
-        await expect(Promise.resolve(client.fail())).rejects.toThrow('HTTP 500');
+        await expect(client.fail().request()).rejects.toThrow('HTTP 500');
+    });
+
+    test('request() called after flush rejects immediately', async () => {
+        const client = new RpcAble({ transport: 'http', endpoint: '/rpc' });
+        const ticket = client.foo();
+        await Promise.resolve();
+
+        await expect(ticket.request()).rejects.toThrow('same tick');
     });
 
     test('calls in different ticks are separate fetches', async () => {
         const client = new RpcAble({ transport: 'http', endpoint: '/rpc' });
-        await client.first();
-        await client.second();
+        client.first();
+        await Promise.resolve();
+        client.second();
+        await Promise.resolve();
         expect(mockFetch.mock.calls).toHaveLength(2);
     });
 
@@ -76,7 +97,7 @@ describe('RpcAble http transport', () => {
 
         globalThis.fetch = strictFetch;
         const client = new RpcAble({ transport: 'http', endpoint: '/rpc' });
-        expect(await client.ping()).toBe('ok');
+        expect(await client.ping().request()).toBe('ok');
         expect(seenThis).toBe(globalThis);
     });
 
@@ -88,7 +109,7 @@ describe('RpcAble http transport', () => {
         expect(client.localHelper()).toBe('local');
     });
 
-    test('.request() resolves to the same value as direct await', async () => {
+    test('.request() and .expects() both resolve with the server return value', async () => {
         const client = new RpcAble({ transport: 'http', endpoint: '/rpc' });
         expect(await client.getGames().request()).toBe('getGames');
         expect(await client.getGames().expects()).toBe('getGames');
@@ -111,7 +132,7 @@ describe('RpcAble http transport', () => {
         }));
 
         const client = new RpcAble({ transport: 'http', endpoint: '/rpc', target: session });
-        expect(await client.getGames()).toBe('ok');
+        expect(await client.getGames().request()).toBe('ok');
         await Promise.resolve();
         expect(session.pushed).toEqual([1, 2, 3]);
     });

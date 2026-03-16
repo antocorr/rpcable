@@ -17,4 +17,4 @@ Open `http://localhost:3300`.
 - `Get Games (push)` triggers `gamesReceived` push.
 - `Ping (.request)` shows round-trip result with role.
 
-Client push handlers are registered with `userSession.extend(...)` in `public/main.js`.
+Client push handlers are registered with `extend(userSession, ...)` in `public/main.js`.

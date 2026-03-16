@@ -1,5 +1,5 @@
 import { createComponent } from './vendor/tinybubble/dist/bubble.js';
-import { RpcAble } from './rpcable.js';
+import { RpcAble, extend } from './rpcable.js';
 
 const CONFIG_KEY = 'rpcable.http-php.demo.config';
 const DEFAULT_NAME = `php-pilot-${Math.floor(Math.random() * 900 + 100)}`;
@@ -115,7 +115,7 @@ function createHttpClient() {
         headers: buildHeaders(),
     });
 
-    rpc.extend({
+    extend(rpc, {
         joined(payload) {
             if (!dashboard) return;
             dashboard.data.status.value = `Join push received for ${payload.user.name}`;
@@ -173,7 +173,7 @@ const PhpDashboard = {
                                     </div>
                                     <div class="rounded-[1.5rem] border border-white/80 bg-slate-950 px-4 py-4 text-white shadow-sm">
                                         <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Current transport</p>
-                                        <p class="mt-2 text-sm font-semibold">Direct await over HTTP</p>
+                                        <p class="mt-2 text-sm font-semibold">HTTP with request()/expects()</p>
                                         <p class="mt-2 text-xs leading-5 text-slate-400">Same client surface as the JS HTTP demo</p>
                                     </div>
                                 </div>
@@ -412,7 +412,7 @@ const PhpDashboard = {
     async join() {
         applyConfigFromForm();
         this.data.status.value = 'Joining...';
-        const result = await getClient().join({ name: config.displayName });
+        const result = await getClient().join({ name: config.displayName }).request();
         this.data.status.value = `Join response: ${result.welcomedAs}`;
         this.data.storageLabel.value = result.storage;
         appendLog(`join response -> ${result.welcomedAs}`);
@@ -420,14 +420,14 @@ const PhpDashboard = {
     async loadGames() {
         applyConfigFromForm();
         this.data.status.value = 'Requesting games...';
-        const count = await getClient().getGames();
+        const count = await getClient().getGames().request();
         this.data.status.value = `Server returned count=${count}`;
         appendLog(`getGames response -> ${count}`);
     },
     async ping() {
         applyConfigFromForm();
         this.data.status.value = 'Pinging server...';
-        const result = await getClient().ping();
+        const result = await getClient().ping().request();
         this.data.lastPing.value = `${result.now} (${result.transport}, ${result.storage})`;
         this.data.serverMood.value = result.mood;
         this.data.storageLabel.value = result.storage;
@@ -440,7 +440,7 @@ const PhpDashboard = {
         const currentMood = this.data.serverMood.value;
         const currentIndex = moods.indexOf(currentMood);
         const nextMood = moods[(currentIndex + 1 + moods.length) % moods.length];
-        const savedMood = await getClient().mood.set(nextMood);
+        const savedMood = await getClient().mood.set(nextMood).request();
         this.data.serverMood.value = savedMood;
         this.data.status.value = `.set saved mood=${savedMood}`;
         appendLog(`mood.set -> ${savedMood}`);
@@ -449,13 +449,13 @@ const PhpDashboard = {
         applyConfigFromForm();
         const message = readFieldValue('pending-message', `Reminder for ${config.displayName}`) || `Reminder for ${config.displayName}`;
         this.data.status.value = 'Queueing pending note...';
-        const result = await getClient().queueInboxNote(message);
+        const result = await getClient().queueInboxNote(message).request();
         this.data.status.value = `Stored pending note (${result.pendingCount} queued)`;
         appendLog(`pending queued -> ${result.pendingCount} item(s)`);
     },
     async clearPending() {
         applyConfigFromForm();
-        const result = await getClient().clearPending();
+        const result = await getClient().clearPending().request();
         this.data.status.value = `Cleared ${result.clearedCount} pending item(s)`;
         appendLog(`pending cleared -> ${result.clearedCount} item(s)`);
     },

@@ -1,5 +1,5 @@
 import { createComponent } from '/vendor/tinybubble/dist/bubble.js';
-import { RpcAble, RpcAbleReceiver } from '/rpcable.js';
+import { RpcAble, RpcAbleReceiver, extend } from '/rpcable.js';
 
 const CHANNEL = '-userSession';
 const socket = window.io({
@@ -22,7 +22,7 @@ socket.on(CHANNEL, (batch) => receiver.dispatch(batch));
 
 let dashboard = null;
 
-userSession.extend({
+extend(userSession, {
     joined({ user }) {
         if (!dashboard) return;
         dashboard.data.status.value = `Connected as ${user.name}`;

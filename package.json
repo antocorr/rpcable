@@ -1,6 +1,6 @@
 {
     "name": "rpcable",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Transparent, bidirectional RPC over socket.io, WebSocket, and HTTP — no string dispatch, no switch/case",
     "type": "module",
     "main": "./src/index.js",

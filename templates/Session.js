@@ -1,11 +1,11 @@
-import { RpcAble, RpcAbleReceiver } from 'rpcable';
+import { RpcAble, RpcAbleReceiver, extend } from 'rpcable';
 import socket from './socket.js'; // your socket.io client instance
 
 const CHANNEL = '-userSession';
 
 class Session {
     // Only put here what is genuinely shared across multiple views.
-    // Per-view callbacks go in that view via userSession.extend().
+    // Per-view callbacks go in that view via extend(userSession, ...).
 
     joined({ user }) {
         // Server confirms connection. Store auth state here.
@@ -22,7 +22,7 @@ export const userSession = new RpcAble({
     target: session,
 });
 
-userSession.extend({
+extend(userSession, {
     gamesReceived(games) {
         // optional: update shared store
         // e.g. gamesStore.set(games);

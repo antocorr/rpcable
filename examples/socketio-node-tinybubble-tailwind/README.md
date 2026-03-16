@@ -20,7 +20,7 @@ Open `http://localhost:3100`.
 - `Ping (.request)` shows request/response with payload.
 - `forbidden()` is called by the client on join and is denied server-side by permissions.
 
-Client push handlers are registered with `userSession.extend(...)` in `public/main.js`.
+Client push handlers are registered with `extend(userSession, ...)` in `public/main.js`.
 
 Transport config is in:
 

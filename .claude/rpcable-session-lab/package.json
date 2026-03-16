@@ -1,0 +1,12 @@
+{
+  "name": "rpcable-session-lab",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check ./lib/loadRpcable.mjs && node --check ./lib/logger.mjs && node --check ./lib/httpSession.mjs && node --check ./lib/socketioSession.mjs && node --check ./lib/websocketSession.mjs && node --check ./scenarios/http-example.mjs && node --check ./scenarios/socketio-example.mjs && node --check ./scenarios/websocket-example.mjs"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.8.1",
+    "ws": "^8.18.0"
+  }
+}

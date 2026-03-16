@@ -95,22 +95,24 @@ function _validateSchema(schema, value) {
     return { valid: true };
 }
 
-class RpcAbleBase {
-    target = null;
-    #extensionKeywords = new Set();
+const INSTANCE = Symbol('rpcable.instance');
 
-    extend(methodAndProps) {
-        if (!methodAndProps || typeof methodAndProps !== 'object') return;
-        for (const key of Object.keys(methodAndProps)) {
-            assignPath(this.target, key, methodAndProps[key]);
-        }
+export function extend(proxy, methodsAndProps) {
+    if (!methodsAndProps || typeof methodsAndProps !== 'object') return;
+    const instance = proxy?.[INSTANCE];
+    const target = instance ? instance.target : null;
+    if (!target) return;
+    for (const key of Object.keys(methodsAndProps)) {
+        assignPath(target, key, methodsAndProps[key]);
     }
+}
 
-    extendOnce(keyword, methodAndProps) {
-        if (this.#extensionKeywords.has(keyword)) return;
-        this.#extensionKeywords.add(keyword);
-        this.extend(methodAndProps);
-    }
+export function getInstance(proxy) {
+    return proxy?.[INSTANCE] ?? null;
+}
+
+export function getTransport(proxy) {
+    return proxy?.[INSTANCE]?.transport ?? null;
 }
 
 function assignPath(target, key, value) {
@@ -172,15 +174,15 @@ export function decodeRpcMessage(payload, expectedEvent = null) {
     return parsed.batch;
 }
 
-export class RpcAble extends RpcAbleBase {
+export class RpcAble {
+    target = null;
     _batch = null;
     _pendingRequests = new Map();
     _collectorQueue = [];
+    _preConnectBatches = [];
     _httpFetch = null;
 
     constructor(options = {}) {
-        super();
-
         if (!options || typeof options !== 'object') {
             throw new Error('[RpcAble] options object is required');
         }
@@ -217,8 +219,22 @@ export class RpcAble extends RpcAbleBase {
             this._httpPushReceiver = new RpcAbleReceiver({ target: this.target });
         }
 
+        if (this.transport === 'websocket' && typeof this.socket.addEventListener === 'function') {
+            const connectingState = this.socket.CONNECTING ?? 0;
+            if (typeof this.socket.readyState === 'number' && this.socket.readyState === connectingState) {
+                this.socket.addEventListener('open', () => {
+                    for (const { payload } of this._preConnectBatches) {
+                        this.socket.send(encodeRpcMessage(this.channel, payload));
+                    }
+                    this._preConnectBatches = [];
+                });
+            }
+            this.socket.addEventListener('close', () => this.destroy());
+        }
+
         return new Proxy(this.target, {
             get: (target, prop) => {
+                if (prop === INSTANCE) return this;
                 if (typeof prop === 'symbol') return Reflect.get(target, prop);
                 if (prop in this) {
                     const val = this[prop];
@@ -239,6 +255,7 @@ export class RpcAble extends RpcAbleBase {
         this._pendingRequests.clear();
         this._batch = null;
         this._collectorQueue = [];
+        this._preConnectBatches = [];
     }
 
     flush() {
@@ -272,25 +289,7 @@ export class RpcAble extends RpcAbleBase {
             reject: null,
         };
 
-        if (this.transport === 'http') {
-            entry.resultPromise = new Promise((resolve, reject) => {
-                entry.resolve = resolve;
-                entry.reject = reject;
-            });
-        }
-
         this._batch.push(entry);
-
-        if (this.transport === 'http') {
-            const requestFactory = () => entry.resultPromise;
-            return {
-                request: requestFactory,
-                expects: requestFactory,
-                then: (...thenArgs) => entry.resultPromise.then(...thenArgs),
-                catch: (...catchArgs) => entry.resultPromise.catch(...catchArgs),
-                finally: (...finallyArgs) => entry.resultPromise.finally(...finallyArgs),
-            };
-        }
 
         const requestFactory = (opts = {}) => this._markAsRequest(entry, opts);
         const fireAndForgetError = () => {
@@ -319,7 +318,17 @@ export class RpcAble extends RpcAbleBase {
             return Promise.reject(new Error('[RpcAble] request() must be called in the same tick'));
         }
 
-        const id = crypto.randomUUID();
+        if (this.transport === 'http') {
+            entry.requestPromise = new Promise((resolve, reject) => {
+                entry.resolve = resolve;
+                entry.reject = reject;
+            });
+            return entry.requestPromise;
+        }
+
+        const id = typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
         const timeoutMs = Number(opts?.timeoutMs ?? this.requestTimeoutMs);
 
         entry.requestPayload = { id, path: entry.path, args: entry.args };
@@ -382,19 +391,26 @@ export class RpcAble extends RpcAbleBase {
         }
 
         if (this.transport === 'websocket') {
-            const openState = this.socket.OPEN ?? 1;
-            if (typeof this.socket.readyState === 'number' && this.socket.readyState !== openState) {
-                const error = new Error('[RpcAble] WebSocket is not open');
-                for (const entry of batch) {
-                    const id = entry.requestPayload?.id;
-                    if (!id) continue;
-                    const pending = this._pendingRequests.get(id);
-                    if (!pending) continue;
-                    clearTimeout(pending.timer);
-                    this._pendingRequests.delete(id);
-                    pending.reject(error);
+            if (typeof this.socket.readyState === 'number') {
+                const connectingState = this.socket.CONNECTING ?? 0;
+                const openState = this.socket.OPEN ?? 1;
+                if (this.socket.readyState === connectingState) {
+                    this._preConnectBatches.push({ batch, payload });
+                    return;
                 }
-                return;
+                if (this.socket.readyState !== openState) {
+                    const error = new Error('[RpcAble] WebSocket is not open');
+                    for (const entry of batch) {
+                        const id = entry.requestPayload?.id;
+                        if (!id) continue;
+                        const pending = this._pendingRequests.get(id);
+                        if (!pending) continue;
+                        clearTimeout(pending.timer);
+                        this._pendingRequests.delete(id);
+                        pending.reject(error);
+                    }
+                    return;
+                }
             }
             this.socket.send(encodeRpcMessage(this.channel, payload));
             return;
@@ -421,19 +437,25 @@ export class RpcAble extends RpcAbleBase {
             }
 
             batch.forEach((entry, index) => {
-                entry.resolve(results[index]);
+                if (typeof entry.resolve === 'function') {
+                    entry.resolve(results[index]);
+                }
             });
         } catch (error) {
-            batch.forEach(entry => entry.reject(error));
+            batch.forEach((entry) => {
+                if (typeof entry.reject === 'function') {
+                    entry.reject(error);
+                }
+            });
         }
     }
 }
 
-export class RpcAbleReceiver extends RpcAbleBase {
+export class RpcAbleReceiver {
+    target = null;
     _receiverLog = { ...RECEIVER_LOG_DEFAULTS };
 
     constructor(options = {}) {
-        super();
         if (options.target) this.target = options.target;
         this._contract = options.contract ?? null;
         this.setSettings(options);

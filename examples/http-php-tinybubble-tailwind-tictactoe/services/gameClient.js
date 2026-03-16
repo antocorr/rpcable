@@ -1,4 +1,4 @@
-import { decodeRpcMessage, RpcAble, RpcAbleReceiver } from '../../../src/RpcAble.js';
+import { decodeRpcMessage, RpcAble, RpcAbleReceiver, extend } from '../../../src/RpcAble.js';
 
 const WS_CHANNEL = '-tttArena';
 
@@ -51,7 +51,7 @@ export function createGameClient(config) {
 
     return {
         transport: config.transport,
-        extend:    (handlers) => player.extend(handlers),
+        extend:    (handlers) => extend(player, handlers),
         bootstrap: () => connected.then(() => player.bootstrap().request()),
         makeMove:  (index)   => connected.then(() => player.makeMove(index).request()),
         sendChat:  (payload) => player.sendChat(payload),

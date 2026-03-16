@@ -1,5 +1,5 @@
 import { createComponent } from '/vendor/tinybubble/dist/bubble.js';
-import { decodeRpcMessage, RpcAble, RpcAbleReceiver } from '/rpcable.js';
+import { decodeRpcMessage, RpcAble, RpcAbleReceiver, extend } from '/rpcable.js';
 
 const CHANNEL = '-userSession';
 const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -34,7 +34,7 @@ ws.addEventListener('message', (event) => {
     if (batch) receiver.dispatch(batch);
 });
 
-userSession.extend({
+extend(userSession, {
     joined({ user }) {
         if (!app) return;
         app.data.userLabel.value = `${user.name} (${user.id})`;

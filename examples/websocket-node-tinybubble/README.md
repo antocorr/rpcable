@@ -20,7 +20,7 @@ Open `http://localhost:3350`.
 - `Save Profile (invalid)` fails validation and the request rejects with the receiver error.
 - `Ping (push)` shows a fire-and-forget push.
 
-Client push handlers are registered with `userSession.extend(...)` in `public/main.js`.
+Client push handlers are registered with `extend(userSession, ...)` in `public/main.js`.
 
 ## Contract used in the demo
 

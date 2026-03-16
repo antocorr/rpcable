@@ -1,0 +1,23 @@
+{
+  "skill_name": "rpcable-session-lab",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Our rpcable chat works for most users, but Carmelo can send a message and never sees the server ack or the follow-up push in his session. Set up a disposable Node session lab under .claude, reproduce the flow as Carmelo, and log outbound batches, server responses, and inbound push handlers before proposing a fix.",
+      "expected_output": "Creates or reuses a dedicated lab under .claude, scripts a transport-aware rpcable client for Carmelo's session, captures logs for sent batches/results/pushes, and localizes whether the failure is on send, response, or push dispatch.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "In this rpcable HTTP project, users can call posts.listLatest() but the latest posts never appear in the client. Build a small Node reproduction workspace in .claude/rpcable-session-lab, replay the same session id against the HTTP endpoint, and use logs to show whether the response push array is empty, malformed, or not dispatched locally.",
+      "expected_output": "Uses the HTTP lab helper, replays the failing session through the real endpoint, logs the raw HTTP request and response body, and identifies whether the missing posts issue happens before push generation or during local push handling.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "A websocket rpcable room join succeeds, but after reconnect the room.timeline.appended push never reaches one specific session token. Spin up a Node websocket session lab, reproduce the reconnect with that token, trace raw websocket frames plus receiver dispatches, and show where the event disappears.",
+      "expected_output": "Creates a websocket-based Node reproduction, preserves the failing token in the lab configuration, logs raw frames and decoded rpc batches, and narrows the bug to transport delivery, channel decoding, or receiver dispatch.",
+      "files": []
+    }
+  ]
+}

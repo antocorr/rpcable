@@ -27,7 +27,7 @@ Use this skill to keep rpcable implementations coherent, elegant, and transport-
    - No string dispatch or switch routers.
    - No placeholder stubs that hide missing handlers.
    - Lean on batching and namespaces already provided by rpcable.
-   - Register client push handlers with `userSession.extend(...)`.
+   - Register client push handlers with `extend(userSession, ...)`.
    - Keep receiver-side validation in `contract` so transport behavior stays aligned.
 
 ## Execution workflow
@@ -45,7 +45,8 @@ When asked to implement or fix rpcable code, follow this sequence.
 
 3. Apply transport-correct semantics.
    - `socketio` / `websocket`: default fire-and-forget, use `.request()` when a return value is required.
-   - `http`: direct await, with optional `.request()`/`.expects()` alias behavior.
+   - `websocket` (native): `RpcAble` buffers calls made while the socket is still `CONNECTING` and flushes on `open`; it also calls `destroy()` automatically on `close`. No manual lifecycle wiring needed.
+   - `http`: same fire-and-forget default as WS; use `.request()` / `.expects()` for returned values while `push` still auto-applies from the HTTP response.
    - `collector`: server-side push queue + `flush()`.
 
 4. Keep auth and role in adapter layer.
@@ -60,7 +61,7 @@ When asked to implement or fix rpcable code, follow this sequence.
    - Prefer `new RpcAbleReceiver({ target, contract, validationFailed })`.
    - `contract` keys are dot-joined method paths like `profile.save`.
    - Validate only `args[0]`; leave later args untouched.
-   - `validationFailed: 'throw'` is the right default for `.request()` / HTTP flows when the caller needs an explicit error.
+   - `validationFailed: 'throw'` is the right default for `.request()` / `.expects()` flows when the caller needs an explicit error.
    - If you update validation in JS, check PHP adapter parity too.
 
 6. Verify end-to-end behavior.
@@ -96,7 +97,7 @@ socket.on('-userSession', (batch) => receiver.dispatch(batch));
 ### Client (HTTP)
 
 ```js
-import { RpcAble } from 'rpcable';
+import { RpcAble, extend } from 'rpcable';
 
 const session = {};
 
@@ -106,7 +107,7 @@ const userSession = new RpcAble({
     target: session,
 });
 
-userSession.extend({
+extend(userSession, {
     gamesReceived(games) {
         // push from HTTP response
     },

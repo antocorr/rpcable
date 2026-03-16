@@ -1,5 +1,5 @@
 import { createComponent } from '/vendor/tinybubble/dist/bubble.js';
-import { RpcAble } from '/rpcable.js';
+import { RpcAble, extend } from '/rpcable.js';
 
 class Session {}
 const session = new Session();
@@ -16,7 +16,7 @@ const userSession = new RpcAble({
 
 let panel = null;
 
-userSession.extend({
+extend(userSession, {
     joined({ user }) {
         if (!panel) return;
         panel.data.userLabel.value = `${user.name} (${user.sessionId})`;
@@ -97,23 +97,23 @@ const HttpPanel = {
     async join() {
         this.data.status.value = 'Joining...';
         const randomName = `http-${Math.floor(Math.random() * 999)}`;
-        const result = await userSession.join({ name: randomName });
+        const result = await userSession.join({ name: randomName }).request();
         this.data.status.value = `Join response: ${result.welcomedAs}`;
     },
     async getGames() {
         this.data.status.value = 'Requesting games...';
-        const count = await userSession.getGames();
+        const count = await userSession.getGames().request();
         this.data.status.value = `Server returned count=${count}`;
     },
     async ping() {
         this.data.status.value = 'Requesting ping...';
-        const result = await userSession.ping();
+        const result = await userSession.ping().request();
         this.data.lastPing.value = `${result.now} (${result.transport})`;
         this.data.status.value = 'Ping ok (also drains pending push)';
     },
     async setAndForget() {
         this.data.status.value = 'Scheduling server message in 5 seconds...';
-        void userSession.setAndForgetMessage().catch(() => {});
+        userSession.setAndForgetMessage();
         this.data.status.value = 'Scheduled. Wait 5s, then click Ping to collect pending push.';
     },
     closeModal() {

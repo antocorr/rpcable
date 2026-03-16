@@ -3,16 +3,20 @@ export interface RpcBatchEntry {
     args: any[];
 }
 
+export type RpcAbleTransport = 'socketio' | 'websocket' | 'http' | 'collector';
+
 export declare function encodeRpcMessage(event: string, batch: RpcBatchEntry[]): string;
 export declare function decodeRpcMessage(payload: any, expectedEvent?: string | null): RpcBatchEntry[] | null;
+export declare function extend(proxy: object | null | undefined, methodsAndProps: Record<string, any>): void;
+export declare function getInstance(proxy: object | null | undefined): RpcAble | null;
+export declare function getTransport(proxy: object | null | undefined): RpcAbleTransport | null;
 
-export interface RpcAbleRequestTicket<T = any> extends PromiseLike<T> {
+export interface RpcAbleRequestTicket<T = any> {
     request(opts?: { timeoutMs?: number }): Promise<T>;
     expects(opts?: { timeoutMs?: number }): Promise<T>;
-    catch<TResult = never>(
-        onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | null
-    ): Promise<T | TResult>;
-    finally(onfinally?: (() => void) | null): Promise<T>;
+    then(...args: any[]): never;
+    catch(...args: any[]): never;
+    finally(...args: any[]): never;
 }
 
 export interface RpcAbleSocketIoOptions {
@@ -53,12 +57,10 @@ export type RpcAbleOptions =
 
 export declare class RpcAble {
     target: any;
-    transport: 'socketio' | 'websocket' | 'http' | 'collector';
+    transport: RpcAbleTransport;
 
     constructor(options: RpcAbleOptions);
 
-    extend(methodAndProps: Record<string, any>): void;
-    extendOnce(keyword: string, methodOrProp: Record<string, any>): void;
     flush(): RpcBatchEntry[];
     destroy(): void;
 }

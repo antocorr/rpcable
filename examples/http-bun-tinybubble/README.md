@@ -18,4 +18,4 @@ Open `http://localhost:3200`.
 - `Ping` shows plain request/response timing.
 - `Set&Forget (5s)` schedules a delayed server push (`readMessage`) and `Ping` collects it from pending queue, opening a client modal.
 
-Client push handlers are registered with `userSession.extend(...)` in `public/main.js`.
+Client push handlers are registered with `extend(userSession, ...)` in `public/main.js`.

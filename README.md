@@ -1,4 +1,4 @@
-# rpcable
+# Rpc-Able
 
 Transparent RPC with one API across socket.io, native WebSocket, and HTTP.
 
@@ -6,16 +6,21 @@ No string dispatch. No switch/case. Just method calls.
 
 ```js
 // client
-userSession.extend({
+extend(userSession, {
     gamesReceived(games) {
         console.log(games);
     },
 });
-userSession.getGames();
+//calling server method directly in the client
+userSession.getGames({ category: 'ball-games' });
 
 // server
-async getGames() {
-    const games = await db.find('games', {});
+async getGames(filter) {
+    const where = {};
+    if(filter && typeof filter.category == 'string'){
+        where.category = filter.category
+    }
+    const games = await db.find('games', where);
     this.client.gamesReceived(games);
 }
 ```
@@ -32,15 +37,18 @@ npm install rpcable
 |---|---|
 | `RpcAble` | Outbound proxy transport (`socketio`, `websocket`, `http`, `collector`) |
 | `RpcAbleReceiver` | Routes incoming batch entries to class methods |
+| `extend(proxy, handlers)` | Register push handlers on an `RpcAble` proxy |
+| `getInstance(proxy)` | Return the internal `RpcAble` instance from a proxy |
+| `getTransport(proxy)` | Return the transport string of an `RpcAble` proxy |
 
 Calls in the same synchronous tick are automatically batched.
 
-Use `extend(...)` on the client to register push handlers such as `gamesReceived`.
+Use `extend(proxy, ...)` to register push handlers such as `gamesReceived`.
 
 ## Client setup (socket.io)
 
 ```js
-import { RpcAble, RpcAbleReceiver } from 'rpcable';
+import { RpcAble, RpcAbleReceiver, extend } from 'rpcable';
 import socket from './socket.js';
 
 const CHANNEL = '-userSession';
@@ -60,7 +68,7 @@ export const userSession = new RpcAble({
     target: session,
 });
 
-userSession.extend({
+extend(userSession, {
     gamesReceived(games) {
         session.games = games;
     },
@@ -102,7 +110,7 @@ class UserSession {
 Default WS calls are fire-and-forget:
 
 ```js
-userSession.extend({
+extend(userSession, {
     gamesReceived(games) {
         console.log(games);
     },
@@ -111,12 +119,14 @@ userSession.extend({
 userSession.getGames();
 ```
 
-If you need a returned value:
+If you need a returned value on any transport:
 
 ```js
 const games = await userSession.getGames().request();
 const same = await userSession.getGames().expects();
 ```
+
+`await userSession.getGames()` now throws the same helpful fire-and-forget error on WebSocket and HTTP. Plain calls still send; use `.request()` or `.expects()` only when you need the response.
 
 Server method:
 
@@ -167,7 +177,7 @@ res.json({ results, push: session.client.flush() });
 HTTP client:
 
 ```js
-import { RpcAble } from 'rpcable';
+import { RpcAble, extend } from 'rpcable';
 
 class Session {
     games = [];
@@ -181,13 +191,13 @@ const userSession = new RpcAble({
     target: session,
 });
 
-userSession.extend({
+extend(userSession, {
     gamesReceived(games) {
         session.games = games;
     },
 });
 
-const gamesCount = await userSession.getGames();
+const gamesCount = await userSession.getGames().request();
 ```
 
 The HTTP response shape is:
@@ -203,6 +213,15 @@ The HTTP response shape is:
 If you keep sessions in a server-side store (`Map`), pushes queued on `collector` survive between requests and are delivered on the next HTTP call.
 
 Use a per-session key (session/token), not just `userId`, to avoid mixing tabs/devices.
+
+## WebSocket lifecycle
+
+When you pass a `new WebSocket(url)` to `RpcAble`, it manages the connection lifecycle automatically:
+
+- **Pre-connect buffer** — calls made while the socket is still `CONNECTING` are buffered and sent as soon as `open` fires. No manual waiting required.
+- **Auto-destroy on close** — when the socket emits `close`, `destroy()` is called automatically, rejecting all pending requests.
+
+This applies to native WebSocket clients only (`transport: 'websocket'`). For socket.io, lifecycle stays under your control since socket.io reconnects internally.
 
 ## Native WebSocket
 
@@ -325,7 +344,7 @@ const receiver = new RpcAbleReceiver({ target: session, contract });
 
 If validation fails the method is not called.
 
-- `validationFailed: 'throw'` throws on the receiver and turns `.request()` / HTTP calls into normal RPC errors
+- `validationFailed: 'throw'` throws on the receiver and turns `.request()` / `.expects()` calls into normal RPC errors
 - any other log mode logs the failure and the call returns `undefined`
 
 Logging is controlled by the `validationFailed` option:
@@ -404,6 +423,46 @@ Supported `inputSchema` features:
 - array rules: `items`
 
 There is no full JSON Schema engine here on purpose: `contract` is a small built-in validator meant for common RPC payload checks.
+
+## Standalone helpers
+
+```js
+import { extend, getInstance, getTransport } from 'rpcable';
+```
+
+### `extend(proxy, handlers)`
+
+Register push handlers on an `RpcAble` proxy. Works in any context — module setup, Vue SFC `onMounted`, Bubble component mount:
+
+```js
+extend(userSession, {
+    gamesReceived(games) {
+        gamesList.value = games;
+    },
+    'scenes.deleted': ({ sceneId }) => {
+        // ...
+    },
+});
+```
+
+Handlers are assigned directly on the target; calling `extend` again with the same key overwrites the previous handler.
+
+### `getInstance(proxy)`
+
+Returns the internal `RpcAble` instance from a proxy. Useful to access `transport`, `socket`, or call `destroy()` / `flush()` without reserving those names as RPC method paths:
+
+```js
+getInstance(userSession).destroy();
+getInstance(userSession).flush();
+```
+
+### `getTransport(proxy)`
+
+Shorthand for `getInstance(proxy).transport`:
+
+```js
+getTransport(userSession); // 'http' | 'socketio' | 'websocket' | 'collector'
+```
 
 ## `.set` shorthand
 

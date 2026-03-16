@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { RpcAble, RpcAbleReceiver, encodeRpcMessage, decodeRpcMessage } from '../src/RpcAble.js';
+import { RpcAble, RpcAbleReceiver, encodeRpcMessage, decodeRpcMessage, extend } from '../src/RpcAble.js';
 
 function makeSocket() {
     const emitted = [];
@@ -74,7 +74,7 @@ describe('RpcAble socketio transport', () => {
         const client = new RpcAble({ transport: 'socketio', socket, channel: 'ch' });
         let called = false;
 
-        client.extend({ onData: () => { called = true; } });
+        extend(client, { onData: () => { called = true; } });
         client.onData();
 
         expect(called).toBe(true);
@@ -85,7 +85,7 @@ describe('RpcAble socketio transport', () => {
         const client = new RpcAble({ transport: 'socketio', socket, channel: 'ch' });
         let called = false;
 
-        client.extend({
+        extend(client, {
             'scenes.listed': () => {
                 called = true;
             },
@@ -93,18 +93,6 @@ describe('RpcAble socketio transport', () => {
 
         client.scenes.listed();
         expect(called).toBe(true);
-    });
-
-    test('extendOnce only registers once per keyword', () => {
-        const socket = makeSocket();
-        const client = new RpcAble({ transport: 'socketio', socket, channel: 'ch' });
-        let count = 0;
-
-        client.extendOnce('myKey', { cb: () => { count++; } });
-        client.extendOnce('myKey', { cb: () => { count += 100; } });
-        client.cb();
-
-        expect(count).toBe(1);
     });
 
     test('awaiting a fire-and-forget call throws a helpful error', () => {
@@ -231,6 +219,50 @@ describe('RpcAble destroy', () => {
         await Promise.resolve();
         collector.destroy();
         expect(collector.flush()).toEqual([]);
+    });
+});
+
+describe('RpcAble websocket pre-connect buffer and auto-destroy', () => {
+    function makeWsSocket(initialState = 0) {
+        const listeners = { open: [], close: [] };
+        const sent = [];
+        const socket = {
+            CONNECTING: 0,
+            OPEN: 1,
+            readyState: initialState,
+            send: (data) => sent.push(data),
+            addEventListener: (event, cb) => { if (listeners[event]) listeners[event].push(cb); },
+            _sent: sent,
+            _open() { socket.readyState = 1; listeners.open.forEach(cb => cb()); },
+            _close() { socket.readyState = 3; listeners.close.forEach(cb => cb()); },
+        };
+        return socket;
+    }
+
+    test('calls made while CONNECTING are sent after open', async () => {
+        const ws = makeWsSocket(0);
+        const client = new RpcAble({ transport: 'websocket', socket: ws, channel: 'ch' });
+
+        client.getGames();
+        await Promise.resolve();
+        expect(ws._sent).toHaveLength(0);
+
+        ws._open();
+        expect(ws._sent).toHaveLength(1);
+        expect(JSON.parse(ws._sent[0]).batch[0].path).toEqual(['getGames']);
+    });
+
+    test('close event triggers destroy() and rejects pending requests', async () => {
+        const ws = makeWsSocket(0);
+        const session = {};
+        const client = new RpcAble({ transport: 'websocket', socket: ws, channel: 'ch', target: session });
+
+        ws._open();
+        const p = client.foo().request();
+        await Promise.resolve();
+
+        ws._close();
+        await expect(p).rejects.toThrow('destroyed');
     });
 });
 

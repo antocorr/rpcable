@@ -1,4 +1,4 @@
-import { RpcAble } from 'rpcable';
+import { RpcAble, extend } from 'rpcable';
 
 const ENDPOINT = '/rpc/user-session'; // adjust
 
@@ -16,7 +16,7 @@ export const userSession = new RpcAble({
     target: session,
 });
 
-userSession.extend({
+extend(userSession, {
     gamesReceived(games) {
         // optional: update shared store
     },
